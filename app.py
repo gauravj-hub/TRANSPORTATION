@@ -94,7 +94,7 @@ def load_and_clean_data(source_name):
 
 # 3. SIDEBAR NAVIGATION
 
-st.sidebar.title("🚜 Agri-Logistics Dashboard")
+st.sidebar.title("🚜 EEKI-Logistics Dashboard")
 
 selected_source = st.sidebar.selectbox("📂 Select View", list(SOURCES.keys()))
 
@@ -324,3 +324,4 @@ else:
 
 
     st.error("No data available. Check Google Sheet IDs.")
+
