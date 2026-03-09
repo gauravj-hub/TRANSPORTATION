@@ -8,7 +8,7 @@ import plotly.express as px
 
 # 1. PAGE CONFIGURATION
 
-st.set_page_config(page_title="Agri-Logistics Dashboard", page_icon="🚜", layout="wide")
+st.set_page_config(page_title="EEKI-Logistics Dashboard", page_icon="🚜", layout="wide")
 
 
 
@@ -321,5 +321,6 @@ if not df.empty:
 
 
 else:
+
 
     st.error("No data available. Check Google Sheet IDs.")
