@@ -85,56 +85,156 @@ if not df.empty:
     # 5. ANALYSIS VIEWS
     
     # --- CROP & VENDOR ANALYSIS ---
+
     if selected_source == "Crop & Vendor Analysis":
+
         if cost_col and qty_col:
+
+            # --- FILTERS ---
+
             f1, f2, f3 = st.columns(3)
+
             with f1:
+
                 crop_opts = ["All Crops"] + sorted(filtered_df[crop_col].dropna().unique().tolist()) if crop_col else ["N/A"]
+
                 sel_crop = st.selectbox("Select Crop", crop_opts)
+
             with f2:
+
                 vendor_opts = ["All Vendors"] + sorted(filtered_df[vendor_col].dropna().unique().tolist()) if vendor_col else ["N/A"]
+
                 sel_vendor = st.selectbox("Select Vendor", vendor_opts)
+
             with f3:
+
                 loc_opts = ["All Locations"] + sorted(filtered_df[loc_col].dropna().unique().tolist()) if loc_col else ["N/A"]
+
                 sel_loc = st.selectbox("Select Location", loc_opts)
 
+
+
             ana_df = filtered_df.copy()
+
             if sel_crop != "All Crops": ana_df = ana_df[ana_df[crop_col] == sel_crop]
+
             if sel_vendor != "All Vendors": ana_df = ana_df[ana_df[vendor_col] == sel_vendor]
+
             if sel_loc != "All Locations": ana_df = ana_df[ana_df[loc_col] == sel_loc]
 
-            group_keys = [k for k in [crop_col, vendor_col, loc_col] if k]
+
+
+            # --- PART 1: MoM TRENDS ---
+
+            if month_col:
+
+                st.subheader("📅 Month-on-Month Trends (Financial Year)")
+
+                fy_order = {'April': 1, 'May': 2, 'June': 3, 'July': 4, 'August': 5, 'September': 6,
+
+                            'October': 7, 'November': 8, 'December': 9, 'January': 10, 'February': 11, 'March': 12}
+
+               
+
+                trend_df = ana_df.copy()
+
+                trend_df[month_col] = trend_df[month_col].astype(str).str.strip().str.capitalize()
+
+                trend_df['Month_Sort'] = trend_df[month_col].map(fy_order)
+
+               
+
+                mo_agg = trend_df.groupby([month_col, 'Month_Sort']).agg({cost_col: 'sum', qty_col: 'sum'}).reset_index().sort_values('Month_Sort')
+
+                mo_agg['Cost_per_kg'] = (mo_agg[cost_col] / mo_agg[qty_col]).fillna(0)
+
+
+
+                m1, m2 = st.columns(2)
+
+                with m1:
+
+                    fig_mo_qty = px.bar(mo_agg, x=month_col, y=qty_col, title=f"Total {qty_col} by Month", text_auto='.0f', color_discrete_sequence=['#4CAF50'])
+
+                    fig_mo_qty.update_xaxes(categoryorder='array', categoryarray=list(fy_order.keys()))
+
+                    st.plotly_chart(fig_mo_qty, use_container_width=True)
+
+                with m2:
+
+                    fig_mo_cpk = px.line(mo_agg, x=month_col, y='Cost_per_kg', title="Avg Cost/Kg Trend", markers=True, text=mo_agg['Cost_per_kg'].apply(lambda x: f"₹{x:.2f}"), color_discrete_sequence=['#FF5722'])
+
+                    fig_mo_cpk.update_xaxes(categoryorder='array', categoryarray=list(fy_order.keys()))
+
+                    st.plotly_chart(fig_mo_cpk, use_container_width=True)
+
+                st.markdown("---")
+
+
+
+            # --- PART 2: CATEGORY ANALYSIS ---
+
+            group_keys = [k for k in [crop_col, vendor_col] if k]
+
             if group_keys:
+
                 summary = ana_df.groupby(group_keys).agg({cost_col: 'sum', qty_col: 'sum'}).reset_index()
-                summary['Cost_per_kg'] = (summary[cost_col] / summary[qty_col]).replace([float('inf')], 0).fillna(0)
+
+                summary['Cost_per_kg'] = (summary[cost_col] / summary[qty_col]).fillna(0)
+
+
 
                 c1, c2 = st.columns(2)
+
                 with c1:
-                    st.subheader("💰 Cost per KG Analysis")
-                    fig_cost = px.bar(summary, x=crop_col if crop_col else vendor_col, y='Cost_per_kg',
-                                      color=vendor_col if vendor_col else None, text_auto='.2f', barmode='group')
+
+                    st.subheader("💰 Cost per KG by Category")
+
+                    fig_cost = px.bar(summary, x=crop_col if crop_col else vendor_col, y='Cost_per_kg', color=vendor_col if vendor_col else None, text_auto='.2f', barmode='group')
+
                     st.plotly_chart(fig_cost, use_container_width=True)
+
                 with c2:
-                    st.subheader("📊 Weight vs Total Spend")
-                    fig_scat = px.scatter(summary, x=qty_col, y=cost_col, size='Cost_per_kg',
-                                          color=crop_col if crop_col else None, hover_name=vendor_col)
+
+                    st.subheader("📊 Spend vs Weight Distribution")
+
+                    fig_scat = px.scatter(summary, x=qty_col, y=cost_col, size='Cost_per_kg', color=crop_col if crop_col else None, hover_name=vendor_col)
+
                     st.plotly_chart(fig_scat, use_container_width=True)
 
-                if loc_col:
-                    st.markdown("---")
-                    st.subheader("📍 Location Performance")
-                    lc1, lc2 = st.columns(2)
-                    with lc1:
-                        fig_pie = px.pie(ana_df, values=cost_col, names=loc_col, hole=0.5, title="Expenditure Share")
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    with lc2:
-                        loc_sum = ana_df.groupby(loc_col).agg({cost_col: 'sum', qty_col: 'sum'}).reset_index()
-                        loc_sum['Cost_per_kg'] = (loc_sum[cost_col] / loc_sum[qty_col]).fillna(0)
-                        fig_loc_bar = px.bar(loc_sum, x=loc_col, y='Cost_per_kg', color='Cost_per_kg',
-                                           text_auto='.2f', title="Avg Cost/Kg by Location", color_continuous_scale='RdYlGn_r')
-                        st.plotly_chart(fig_loc_bar, use_container_width=True)
+                st.markdown("---")
+
+
+
+            # --- PART 3: LOCATION PERFORMANCE ---
+
+            if loc_col:
+
+                st.subheader("📍 Location Performance")
+
+                lc1, lc2 = st.columns(2)
+
+                with lc1:
+
+                    fig_pie = px.pie(ana_df, values=cost_col, names=loc_col, hole=0.5, title="Expenditure Share by Location")
+
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                with lc2:
+
+                    loc_sum = ana_df.groupby(loc_col).agg({cost_col: 'sum', qty_col: 'sum'}).reset_index()
+
+                    loc_sum['Cost_per_kg'] = (loc_sum[cost_col] / loc_sum[qty_col]).fillna(0)
+
+                    fig_loc_bar = px.bar(loc_sum, x=loc_col, y='Cost_per_kg', color='Cost_per_kg', text_auto='.2f', title="Avg Cost/Kg by Location", color_continuous_scale='RdYlGn_r')
+
+                    st.plotly_chart(fig_loc_bar, use_container_width=True)
+
+
+
         else:
-            st.warning("Transportation data needs Cost and Weight columns.")
+
+            st.warning("Ensure Cost and Weight columns exist.")
 
     # --- TRANSPORTATION PERFORMANCE (April to March Financial Year Sort) ---
     elif selected_source == "Transportation":
@@ -176,3 +276,4 @@ if not df.empty:
 
 else:
     st.error("No data available. Please check your Google Sheet IDs and permissions.")
+
