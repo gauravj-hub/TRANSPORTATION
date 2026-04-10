@@ -8,16 +8,16 @@ import plotly.express as px
 st.set_page_config(page_title="EEKI-Logistics Dashboard", page_icon="🚜", layout="wide")
 
 # -----------------------------
-# INDIAN NUMBER FORMAT
+# INDIAN NUMBER FORMAT (CORE)
 # -----------------------------
 def format_indian_number(num):
-    if num is None:
-        return "0.00"
+    if pd.isnull(num):
+        return ""
 
     try:
         num = float(num)
     except:
-        return "0.00"
+        return str(num)
 
     s = f"{num:.2f}"
     whole, decimal = s.split(".")
@@ -36,6 +36,14 @@ def format_indian_number(num):
         parts.insert(0, rest)
 
     return ",".join(parts) + "," + last3 + "." + decimal
+
+
+def format_df_indian(df):
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].apply(format_indian_number)
+    return df
 
 
 # -----------------------------
@@ -95,7 +103,7 @@ def load_and_clean_data(source_name):
 
 
 # -----------------------------
-# KPI ALERT FUNCTION
+# KPI ALERT
 # -----------------------------
 def detect_high_cost_months(df, month_col, value_col):
     if not month_col or not value_col:
@@ -103,7 +111,8 @@ def detect_high_cost_months(df, month_col, value_col):
 
     fy_order = {
         'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-        'October': 7,'November': 8,'December': 9,'January': 10,'February': 11,'March': 12
+        'October': 7,'November': 8,'December': 9,
+        'January': 10,'February': 11,'March': 12
     }
 
     temp = df.copy()
@@ -143,13 +152,11 @@ if not df.empty:
         mask = df.apply(lambda r: r.astype(str).str.lower().str.contains(search).any(), axis=1)
         filtered_df = df[mask]
 
-    # FY FILTER
     if 'FY' in df.columns:
         fy_options = sorted(df['FY'].dropna().unique())
         selected_fy = st.sidebar.selectbox("📅 Financial Year", fy_options)
         filtered_df = filtered_df[filtered_df['FY'] == selected_fy]
 
-    # COLUMN DETECTION
     month_col = next((c for c in df.columns if 'month' in c.lower()), None)
     qty_col = next((c for c in df.columns if any(x in c.lower() for x in ['weight','qty'])), None)
     cost_col = next((c for c in df.columns if any(x in c.lower() for x in ['cost','amount'])), None)
@@ -164,16 +171,18 @@ if not df.empty:
 
     c1,c2,c3 = st.columns(3)
     c1.metric("Records", len(filtered_df))
+
     if qty_col:
-        c2.metric("Total Qty", f"{filtered_df[qty_col].sum():,.0f}")
+        c2.metric("Total Qty", format_indian_number(filtered_df[qty_col].sum()))
+
     if cost_col:
         c3.metric("Total Cost", f"₹ {format_indian_number(filtered_df[cost_col].sum())}")
 
     st.markdown("---")
 
-    # =====================================================
-    # 🚜 CROP & VENDOR ANALYSIS
-    # =====================================================
+    # -----------------------------
+    # CROP & VENDOR ANALYSIS
+    # -----------------------------
     if selected_source == "Crop & Vendor Analysis" and cost_col and qty_col:
 
         f1,f2,f3 = st.columns(3)
@@ -191,16 +200,14 @@ if not df.empty:
         if sel_loc != "All":
             ana_df = ana_df[ana_df[loc_col] == sel_loc]
 
-        # HIGH COST ALERT
         _, alerts = detect_high_cost_months(ana_df, month_col, cost_col)
 
         if alerts is not None and not alerts.empty:
-            st.warning("⚠️ High Cost Alert: Unusual monthly expenditure detected")
-            st.dataframe(alerts, use_container_width=True, hide_index=True)
+            st.warning("⚠️ High Cost Alert")
+            st.dataframe(format_df_indian(alerts), use_container_width=True)
 
-        # MONTHLY TREND
         if month_col:
-            st.subheader("📅 Month-on-Month Trend")
+            st.subheader("📅 Monthly Trend")
 
             fy_order = {
                 'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
@@ -214,31 +221,32 @@ if not df.empty:
 
             mo = tmp.groupby([month_col,'Month_Sort']).agg({qty_col:'sum',cost_col:'sum'}).reset_index()
             mo = mo.sort_values('Month_Sort')
-            mo['Cost_per_kg'] = mo[cost_col] / mo[qty_col]
+
+            mo["Qty_Label"] = mo[qty_col].apply(format_indian_number)
+            mo["Cost_Label"] = mo[cost_col].apply(format_indian_number)
 
             c1,c2 = st.columns(2)
 
             with c1:
-                st.plotly_chart(px.bar(mo, x=month_col, y=qty_col, text_auto='.0f'), use_container_width=True)
+                st.plotly_chart(px.bar(mo, x=month_col, y=qty_col, text="Qty_Label"), use_container_width=True)
 
             with c2:
-                st.plotly_chart(px.line(mo, x=month_col, y='Cost_per_kg', markers=True), use_container_width=True)
+                st.plotly_chart(px.line(mo, x=month_col, y=cost_col, markers=True), use_container_width=True)
 
         st.markdown("---")
 
-        # SUMMARY
         summary = ana_df.groupby([crop_col, vendor_col]).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-        summary['Cost_per_kg'] = summary[cost_col] / summary[qty_col]
+
+        summary["Cost_Label"] = summary[cost_col].apply(format_indian_number)
 
         c1,c2 = st.columns(2)
 
         with c1:
-            st.plotly_chart(px.bar(summary, x=crop_col, y='Cost_per_kg', color=vendor_col), use_container_width=True)
+            st.plotly_chart(px.bar(summary, x=crop_col, y=cost_col, color=vendor_col), use_container_width=True)
 
         with c2:
-            st.plotly_chart(px.scatter(summary, x=qty_col, y=cost_col, size='Cost_per_kg', color=crop_col), use_container_width=True)
+            st.plotly_chart(px.scatter(summary, x=qty_col, y=cost_col, color=crop_col), use_container_width=True)
 
-        # PIE
         if loc_col:
             c1,c2 = st.columns(2)
 
@@ -247,13 +255,11 @@ if not df.empty:
 
             with c2:
                 loc = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-                loc['Cost_per_kg'] = loc[cost_col] / loc[qty_col]
+                st.plotly_chart(px.bar(loc, x=loc_col, y=cost_col), use_container_width=True)
 
-                st.plotly_chart(px.bar(loc, x=loc_col, y='Cost_per_kg'), use_container_width=True)
-
-    # =====================================================
-    # 🚚 TRANSPORTATION
-    # =====================================================
+    # -----------------------------
+    # TRANSPORTATION
+    # -----------------------------
     elif selected_source == "Transportation" and month_col and qty_col:
 
         st.subheader("📅 Monthly Weight Trend")
@@ -270,13 +276,16 @@ if not df.empty:
         tmp = tmp.dropna(subset=['Month_Sort'])
 
         agg = tmp.groupby([month_col,'Month_Sort'])[qty_col].sum().reset_index()
-        agg = agg.sort_values('Month_Sort')
 
-        st.plotly_chart(px.bar(agg, x=month_col, y=qty_col, text_auto=',.0f'), use_container_width=True)
+        agg["Qty_Label"] = agg[qty_col].apply(format_indian_number)
 
-    # RAW DATA
+        st.plotly_chart(px.bar(agg, x=month_col, y=qty_col, text="Qty_Label"), use_container_width=True)
+
+    # -----------------------------
+    # RAW DATA (INDIAN FORMAT)
+    # -----------------------------
     with st.expander("🔍 View Data"):
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+        st.dataframe(format_df_indian(filtered_df), use_container_width=True, hide_index=True)
 
 else:
     st.error("No data available")
