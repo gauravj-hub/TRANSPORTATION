@@ -2,13 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
 st.set_page_config(page_title="EEKI-Logistics Dashboard", page_icon="🚜", layout="wide")
 
 # -----------------------------
-# DATA SOURCES
+# SOURCES
 # -----------------------------
 SOURCES = {
     "Production": {"id": "1PQUiIP5yMQfmJwpwy9e4dv4-HgJNDMwCHfc78eaEu5Y", "gid": "0", "skip": []},
@@ -27,256 +24,163 @@ def load_and_clean_data(source_name):
     source = SOURCES[source_name]
     url = f"https://docs.google.com/spreadsheets/d/{source['id']}/export?format=csv&gid={source['gid']}"
 
-    try:
-        df = pd.read_csv(url, skiprows=source['skip'], low_memory=False)
+    df = pd.read_csv(url, skiprows=source['skip'], low_memory=False)
 
-        if df.empty:
-            return df
+    df = df[df.iloc[:, 0].notna() & (df.iloc[:, 0].astype(str).str.strip() != "")]
 
-        df = df[df.iloc[:, 0].notna() & (df.iloc[:, 0].astype(str).str.strip() != "")]
+    date_col = None
 
-        date_col_detected = None
+    for col in df.columns:
+        c = col.lower()
 
-        for col in df.columns:
-            col_lower = col.lower()
+        if df[col].dtype == "object":
+            df[col] = df[col].astype(str).str.strip().str.title()
 
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype(str).str.strip().str.title()
+        if "date" in c:
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+            date_col = col
 
-            if 'date' in col_lower:
-                df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
-                date_col_detected = col
+        if any(x in c for x in ["qty", "weight"]):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            if any(x in col_lower for x in ['qty', 'weight', 'area', 'cost', 'amount', 'price']):
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+        if any(x in c for x in ["cost", "amount", "price"]):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        # FY (April–March)
-        if date_col_detected:
-            df['FY'] = df[date_col_detected].apply(
-                lambda x: x.year if pd.notnull(x) and x.month >= 4 else (x.year - 1 if pd.notnull(x) else None)
-            )
+    if date_col:
+        df["FY"] = df[date_col].apply(
+            lambda x: x.year if pd.notnull(x) and x.month >= 4 else (x.year - 1 if pd.notnull(x) else None)
+        )
 
-        return df
-
-    except Exception as e:
-        st.error(f"Error loading {source_name}: {e}")
-        return pd.DataFrame()
-
-
-# -----------------------------
-# KPI ALERT FUNCTION (SAFE)
-# -----------------------------
-def detect_high_cost_months(df, month_col, value_col):
-    if not month_col or not value_col:
-        return None, None
-
-    fy_order = {
-        'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-        'October': 7,'November': 8,'December': 9,'January': 10,'February': 11,'March': 12
-    }
-
-    temp = df.copy()
-    temp[month_col] = temp[month_col].astype(str).str.strip().str.capitalize()
-    temp['Month_Sort'] = temp[month_col].map(fy_order)
-    temp = temp.dropna(subset=['Month_Sort'])
-
-    monthly = temp.groupby(month_col)[value_col].sum().reset_index()
-
-    if monthly.empty:
-        return monthly, None
-
-    mean = monthly[value_col].mean()
-    std = monthly[value_col].std()
-
-    threshold = mean + 1.5 * std
-
-    alerts = monthly[monthly[value_col] > threshold].sort_values(value_col, ascending=False)
-
-    return monthly, alerts
+    return df
 
 
 # -----------------------------
 # SIDEBAR
 # -----------------------------
-st.sidebar.title("🚜 EEKI-Logistics Dashboard")
-selected_source = st.sidebar.selectbox("📂 Select View", list(SOURCES.keys()))
+st.sidebar.title("🚜 EEKI Dashboard")
 
-df = load_and_clean_data(selected_source)
+source = st.sidebar.selectbox("Select View", list(SOURCES.keys()))
+df = load_and_clean_data(source)
 
 if not df.empty:
 
-    search = st.sidebar.text_input("🔍 Global Search", "").strip().lower()
+    search = st.sidebar.text_input("Search").lower()
     filtered_df = df.copy()
 
     if search:
-        mask = df.apply(lambda r: r.astype(str).str.lower().str.contains(search).any(), axis=1)
-        filtered_df = df[mask]
+        filtered_df = df[df.apply(lambda r: r.astype(str).str.lower().str.contains(search).any(), axis=1)]
 
     # FY FILTER
-    if 'FY' in df.columns:
-        fy_options = sorted(df['FY'].dropna().unique())
-        selected_fy = st.sidebar.selectbox("📅 Financial Year", fy_options)
-        filtered_df = filtered_df[filtered_df['FY'] == selected_fy]
+    if "FY" in df.columns:
+        fy = st.sidebar.selectbox("FY", sorted(df["FY"].dropna().unique()))
+        filtered_df = filtered_df[filtered_df["FY"] == fy]
 
     # COLUMN DETECTION
-    month_col = next((c for c in df.columns if 'month' in c.lower()), None)
-    qty_col = next((c for c in df.columns if any(x in c.lower() for x in ['weight','qty'])), None)
-    cost_col = next((c for c in df.columns if any(x in c.lower() for x in ['cost','amount'])), None)
-    crop_col = next((c for c in df.columns if 'crop' in c.lower()), None)
-    vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
-    loc_col = next((c for c in df.columns if 'location' in c.lower()), None)
+    month_col = next((c for c in df.columns if "month" in c.lower()), None)
+    qty_col = next((c for c in df.columns if "weight" in c.lower() or "qty" in c.lower()), None)
+    cost_col = next((c for c in df.columns if "cost" in c.lower()), None)
+    crop_col = next((c for c in df.columns if "crop" in c.lower()), None)
+    vendor_col = next((c for c in df.columns if "vendor" in c.lower()), None)
+    loc_col = next((c for c in df.columns if "location" in c.lower()), None)
 
-    # -----------------------------
-    # TITLE + KPI
-    # -----------------------------
-    st.title(f"📊 {selected_source} Dashboard")
+    st.title(f"📊 {source} Dashboard")
 
-    c1,c2,c3 = st.columns(3)
+    # =========================
+    # KPI → ALWAYS COST/KG
+    # =========================
+    total_qty = filtered_df[qty_col].sum() if qty_col else 0
+    total_cost = filtered_df[cost_col].sum() if cost_col else 0
+
+    cost_per_kg = total_cost / total_qty if total_qty != 0 else 0
+
+    c1, c2, c3 = st.columns(3)
     c1.metric("Records", len(filtered_df))
-    if qty_col: c2.metric("Total Qty", f"{filtered_df[qty_col].sum():,.0f}")
-    if cost_col: c3.metric("Total Cost", f"₹ {filtered_df[cost_col].sum():,.0f}")
+    c2.metric("Total Qty", f"{total_qty:,.0f}")
+    c3.metric("Cost / KG", f"₹ {cost_per_kg:.2f}")
 
     st.markdown("---")
 
     # =====================================================
-    # 🚜 CROP & VENDOR ANALYSIS
+    # 🚜 CROP & VENDOR (FULLY DYNAMIC)
     # =====================================================
-    if selected_source == "Crop & Vendor Analysis" and cost_col and qty_col:
+    if source == "Crop & Vendor Analysis" and qty_col:
 
-        f1,f2,f3 = st.columns(3)
+        f1, f2, f3 = st.columns(3)
 
         sel_crop = f1.selectbox("Crop", ["All"] + sorted(filtered_df[crop_col].dropna().unique())) if crop_col else "All"
         sel_vendor = f2.selectbox("Vendor", ["All"] + sorted(filtered_df[vendor_col].dropna().unique())) if vendor_col else "All"
         sel_loc = f3.selectbox("Location", ["All"] + sorted(filtered_df[loc_col].dropna().unique())) if loc_col else "All"
 
-        ana_df = filtered_df.copy()
+        ana = filtered_df.copy()
 
         if sel_crop != "All":
-            ana_df = ana_df[ana_df[crop_col] == sel_crop]
+            ana = ana[ana[crop_col] == sel_crop]
         if sel_vendor != "All":
-            ana_df = ana_df[ana_df[vendor_col] == sel_vendor]
+            ana = ana[ana[vendor_col] == sel_vendor]
         if sel_loc != "All":
-            ana_df = ana_df[ana_df[loc_col] == sel_loc]
+            ana = ana[ana[loc_col] == sel_loc]
 
-        # =========================
-        # 🚨 HIGH COST ALERT (SAFE)
-        # =========================
-        monthly, alerts = detect_high_cost_months(ana_df, month_col, cost_col)
+        # 🔥 DYNAMIC COST/KG (MAIN CHANGE)
+        qty = ana[qty_col].sum()
+        cost = ana[cost_col].sum()
+        cpk = cost / qty if qty != 0 else 0
 
-        if alerts is not None and not alerts.empty:
-            st.warning("⚠️ High Cost Alert: Unusual monthly expenditure detected")
+        st.metric("Cost / KG (Filtered)", f"₹ {cpk:.2f}")
 
-            st.dataframe(alerts, use_container_width=True, hide_index=True)
-
-        # =========================
-        # 📅 MONTHLY TREND
-        # =========================
+        # MONTH TREND (COST/KG DYNAMIC)
         if month_col:
-            st.subheader("📅 Month-on-Month Trend")
-
             fy_order = {
-                'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-                'October': 7,'November': 8,'December': 9,
-                'January': 10,'February': 11,'March': 12
+                'April':1,'May':2,'June':3,'July':4,'August':5,'September':6,
+                'October':7,'November':8,'December':9,
+                'January':10,'February':11,'March':12
             }
 
-            tmp = ana_df.copy()
+            tmp = ana.copy()
             tmp[month_col] = tmp[month_col].astype(str).str.strip().str.capitalize()
-            tmp['Month_Sort'] = tmp[month_col].map(fy_order)
+            tmp["sort"] = tmp[month_col].map(fy_order)
 
-            mo = tmp.groupby([month_col,'Month_Sort']).agg({qty_col:'sum',cost_col:'sum'}).reset_index()
-            mo = mo.sort_values('Month_Sort')
-            mo['Cost_per_kg'] = mo[cost_col] / mo[qty_col]
+            m = tmp.groupby([month_col,"sort"]).agg({qty_col:"sum",cost_col:"sum"}).reset_index()
+            m = m.sort_values("sort")
+            m["Cost/KG"] = m[cost_col] / m[qty_col]
 
-            c1,c2 = st.columns(2)
-
-            with c1:
-                st.plotly_chart(
-                    px.bar(mo, x=month_col, y=qty_col, text_auto='.0f', title="Monthly Weight Trend"),
-                    use_container_width=True
-                )
-
-            with c2:
-                st.plotly_chart(
-                    px.line(mo, x=month_col, y='Cost_per_kg', markers=True, title="Cost per KG Trend"),
-                    use_container_width=True
-                )
-
-        st.markdown("---")
-
-        # =========================
-        # SCATTER + BAR
-        # =========================
-        summary = ana_df.groupby([crop_col, vendor_col]).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-        summary['Cost_per_kg'] = summary[cost_col] / summary[qty_col]
-
-        c1,c2 = st.columns(2)
-
-        with c1:
-            st.plotly_chart(
-                px.bar(summary, x=crop_col, y='Cost_per_kg', color=vendor_col),
-                use_container_width=True
-            )
-
-        with c2:
-            st.plotly_chart(
-                px.scatter(summary, x=qty_col, y=cost_col,
-                            size='Cost_per_kg', color=crop_col,
-                            hover_name=vendor_col),
-                use_container_width=True
-            )
-
-        # =========================
-        # PIE + LOCATION
-        # =========================
-        if loc_col:
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
 
             with c1:
-                st.plotly_chart(
-                    px.pie(ana_df, names=loc_col, values=cost_col, hole=0.5),
-                    use_container_width=True
-                )
+                st.plotly_chart(px.bar(m, x=month_col, y=qty_col, title="Monthly Weight"), use_container_width=True)
 
             with c2:
-                loc = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-                loc['Cost_per_kg'] = loc[cost_col] / loc[qty_col]
-
-                st.plotly_chart(
-                    px.bar(loc, x=loc_col, y='Cost_per_kg', color='Cost_per_kg'),
-                    use_container_width=True
-                )
+                st.plotly_chart(px.line(m, x=month_col, y="Cost/KG", title="Cost/KG Trend"), use_container_width=True)
 
     # =====================================================
-    # 🚚 TRANSPORTATION
+    # 🚚 TRANSPORT (DYNAMIC COST/KG)
     # =====================================================
-    elif selected_source == "Transportation" and month_col and qty_col:
+    elif source == "Transportation" and qty_col:
 
-        st.subheader("📅 Monthly Weight Trend")
+        qty = filtered_df[qty_col].sum()
+        cost = filtered_df[cost_col].sum() if cost_col else 0
+        cpk = cost / qty if qty != 0 else 0
 
-        fy_order = {
-            'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-            'October': 7,'November': 8,'December': 9,
-            'January': 10,'February': 11,'March': 12
-        }
+        st.metric("Cost / KG", f"₹ {cpk:.2f}")
 
-        tmp = filtered_df.copy()
-        tmp[month_col] = tmp[month_col].astype(str).str.strip().str.capitalize()
-        tmp['Month_Sort'] = tmp[month_col].map(fy_order)
-        tmp = tmp.dropna(subset=['Month_Sort'])
+        if month_col:
+            fy_order = {
+                'April':1,'May':2,'June':3,'July':4,'August':5,'September':6,
+                'October':7,'November':8,'December':9,
+                'January':10,'February':11,'March':12
+            }
 
-        agg = tmp.groupby([month_col,'Month_Sort'])[qty_col].sum().reset_index()
-        agg = agg.sort_values('Month_Sort')
+            tmp = filtered_df.copy()
+            tmp[month_col] = tmp[month_col].astype(str).str.strip().str.capitalize()
+            tmp["sort"] = tmp[month_col].map(fy_order)
 
-        st.plotly_chart(
-            px.bar(agg, x=month_col, y=qty_col, text_auto=',.0f',
-                   title="Transportation Monthly Weight"),
-            use_container_width=True
-        )
+            m = tmp.groupby([month_col,"sort"])[qty_col].sum().reset_index()
+            m = m.sort_values("sort")
+
+            st.plotly_chart(px.bar(m, x=month_col, y=qty_col, title="Monthly Weight"), use_container_width=True)
 
     # RAW DATA
-    with st.expander("🔍 View Data"):
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+    with st.expander("Raw Data"):
+        st.dataframe(filtered_df, use_container_width=True)
 
 else:
-    st.error("No data available")
+    st.error("No data")
