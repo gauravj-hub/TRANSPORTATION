@@ -23,28 +23,24 @@ def load_and_clean_data(source_name):
         df = pd.read_csv(url, skiprows=source['skip'], low_memory=False)
         if df.empty: return df
         
-        # Remove empty rows
         df = df[df.iloc[:, 0].notna() & (df.iloc[:, 0].astype(str).str.strip() != "")]
 
-        date_col_detected = None  # NEW
+        date_col_detected = None
 
         for col in df.columns:
             col_lower = col.lower()
             
-            # Fix Text Columns
             if df[col].dtype == 'object':
                 df[col] = df[col].astype(str).str.strip().str.title()
             
-            # Fix Dates
             if 'date' in col_lower:
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
-                date_col_detected = col  # NEW
+                date_col_detected = col
             
-            # Fix Numbers
             if any(x in col_lower for x in ['qty', 'weight', 'area', 'cost', 'amount', 'price']):
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
         
-        # ✅ ADD FINANCIAL YEAR (April → March)
+        # ✅ FY LOGIC
         if date_col_detected:
             df['FY'] = df[date_col_detected].apply(
                 lambda x: x.year if pd.notnull(x) and x.month >= 4 
@@ -56,116 +52,96 @@ def load_and_clean_data(source_name):
         st.error(f"Error loading {source_name}: {e}")
         return pd.DataFrame()
 
-# 3. SIDEBAR NAVIGATION
+# SIDEBAR
 st.sidebar.title("🚜 EEKI-Logistics Dashboard")
 selected_source = st.sidebar.selectbox("📂 Select View", list(SOURCES.keys()))
 df = load_and_clean_data(selected_source)
 
 if not df.empty:
-    # GLOBAL SEARCH
-    search = st.sidebar.text_input("🔍 Global Search (Case Insensitive)", "").strip().lower()
+    search = st.sidebar.text_input("🔍 Global Search", "").strip().lower()
     filtered_df = df.copy()
 
     if search:
         mask = df.apply(lambda r: r.astype(str).str.lower().str.contains(search).any(), axis=1)
         filtered_df = df[mask]
 
-    # ✅ FINANCIAL YEAR FILTER (NEW ONLY)
+    # ✅ FY FILTER
     if 'FY' in df.columns:
         fy_options = sorted(df['FY'].dropna().unique())
-        selected_fy = st.sidebar.selectbox("📅 Select Financial Year", fy_options)
+        selected_fy = st.sidebar.selectbox("📅 Financial Year", fy_options)
         filtered_df = filtered_df[filtered_df['FY'] == selected_fy]
 
     # COLUMN DETECTION
-    date_col = next((c for c in df.columns if 'date' in c.lower()), None)
     month_col = next((c for c in df.columns if 'month' in c.lower()), None)
-    qty_col = next((c for c in df.columns if any(x in c.lower() for x in ['weight', 'qty', 'total weight'])), None)
-    cost_col = next((c for c in df.columns if any(x in c.lower() for x in ['cost', 'amount', 'total cost'])), None)
-    crop_col = next((c for c in df.columns if any(x in c.lower() for x in ['crop', 'item'])), None)
-    vendor_col = next((c for c in df.columns if any(x in c.lower() for x in ['vendor', 'supplier', 'transporter'])), None)
-    loc_col = next((c for c in df.columns if any(x in c.lower().strip() for x in ['location', 'site', 'destination'])), None)
-    area_col = next((c for c in df.columns if 'area' in c.lower()), None)
+    qty_col = next((c for c in df.columns if any(x in c.lower() for x in ['weight','qty'])), None)
+    cost_col = next((c for c in df.columns if any(x in c.lower() for x in ['cost','amount'])), None)
+    crop_col = next((c for c in df.columns if 'crop' in c.lower()), None)
+    vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
+    loc_col = next((c for c in df.columns if 'location' in c.lower()), None)
 
-    # 4. KPI SUMMARY
     st.title(f"📊 {selected_source} Dashboard")
-    k1, k2, k3 = st.columns(3)
-    with k1: st.metric("Total Records", f"{len(filtered_df):,}")
-    with k2:
-        val_col = qty_col if qty_col else area_col
-        if val_col: st.metric(f"Total {val_col}", f"{filtered_df[val_col].sum():,.0f}")
-    with k3:
-        if cost_col: st.metric("Total Expenditure", f"₹ {filtered_df[cost_col].sum():,.0f}")
-        else: st.metric("Data Quality", "Standardized")
+
+    # KPI
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Records", len(filtered_df))
+    if qty_col: c2.metric("Total Qty", f"{filtered_df[qty_col].sum():,.0f}")
+    if cost_col: c3.metric("Total Cost", f"₹ {filtered_df[cost_col].sum():,.0f}")
 
     st.markdown("---")
 
-    # --- CROP & VENDOR ANALYSIS ---
-    if selected_source == "Crop & Vendor Analysis":
+    # ✅ FULL CROP & VENDOR ANALYSIS (RESTORED)
+    if selected_source == "Crop & Vendor Analysis" and cost_col and qty_col:
 
-        if cost_col and qty_col:
+        # Filters
+        f1,f2,f3 = st.columns(3)
+        sel_crop = f1.selectbox("Crop", ["All"] + sorted(filtered_df[crop_col].dropna().unique())) if crop_col else "All"
+        sel_vendor = f2.selectbox("Vendor", ["All"] + sorted(filtered_df[vendor_col].dropna().unique())) if vendor_col else "All"
+        sel_loc = f3.selectbox("Location", ["All"] + sorted(filtered_df[loc_col].dropna().unique())) if loc_col else "All"
 
-            f1, f2, f3 = st.columns(3)
-            with f1:
-                crop_opts = ["All Crops"] + sorted(filtered_df[crop_col].dropna().unique().tolist()) if crop_col else ["N/A"]
-                sel_crop = st.selectbox("Select Crop", crop_opts)
-            with f2:
-                vendor_opts = ["All Vendors"] + sorted(filtered_df[vendor_col].dropna().unique().tolist()) if vendor_col else ["N/A"]
-                sel_vendor = st.selectbox("Select Vendor", vendor_opts)
-            with f3:
-                loc_opts = ["All Locations"] + sorted(filtered_df[loc_col].dropna().unique().tolist()) if loc_col else ["N/A"]
-                sel_loc = st.selectbox("Select Location", loc_opts)
+        ana_df = filtered_df.copy()
+        if sel_crop!="All": ana_df = ana_df[ana_df[crop_col]==sel_crop]
+        if sel_vendor!="All": ana_df = ana_df[ana_df[vendor_col]==sel_vendor]
+        if sel_loc!="All": ana_df = ana_df[ana_df[loc_col]==sel_loc]
 
-            ana_df = filtered_df.copy()
-            if sel_crop != "All Crops": ana_df = ana_df[ana_df[crop_col] == sel_crop]
-            if sel_vendor != "All Vendors": ana_df = ana_df[ana_df[vendor_col] == sel_vendor]
-            if sel_loc != "All Locations": ana_df = ana_df[ana_df[loc_col] == sel_loc]
+        # Category Summary
+        summary = ana_df.groupby([crop_col,vendor_col]).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
+        summary['Cost_per_kg'] = summary[cost_col]/summary[qty_col]
 
-            # MoM Trends
-            if month_col:
-                st.subheader("📅 Month-on-Month Trends (Financial Year)")
+        c1,c2 = st.columns(2)
 
-                fy_order = {'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-                            'October': 7,'November': 8,'December': 9,'January': 10,'February': 11,'March': 12}
+        # BAR
+        with c1:
+            fig_cost = px.bar(summary, x=crop_col, y='Cost_per_kg', color=vendor_col, text_auto='.2f')
+            st.plotly_chart(fig_cost, use_container_width=True)
 
-                trend_df = ana_df.copy()
-                trend_df[month_col] = trend_df[month_col].astype(str).str.strip().str.capitalize()
-                trend_df['Month_Sort'] = trend_df[month_col].map(fy_order)
+        # SCATTER (RESTORED)
+        with c2:
+            fig_scat = px.scatter(summary, x=qty_col, y=cost_col,
+                                  size='Cost_per_kg', color=crop_col,
+                                  hover_name=vendor_col)
+            st.plotly_chart(fig_scat, use_container_width=True)
 
-                mo_agg = trend_df.groupby([month_col, 'Month_Sort']).agg({cost_col: 'sum', qty_col: 'sum'}).reset_index().sort_values('Month_Sort')
-                mo_agg['Cost_per_kg'] = (mo_agg[cost_col] / mo_agg[qty_col]).fillna(0)
+        st.markdown("---")
 
-                m1, m2 = st.columns(2)
-                with m1:
-                    fig_mo_qty = px.bar(mo_agg, x=month_col, y=qty_col, text_auto='.0f')
-                    fig_mo_qty.update_xaxes(categoryorder='array', categoryarray=list(fy_order.keys()))
-                    st.plotly_chart(fig_mo_qty, use_container_width=True)
-                with m2:
-                    fig_mo_cpk = px.line(mo_agg, x=month_col, y='Cost_per_kg', markers=True)
-                    fig_mo_cpk.update_xaxes(categoryorder='array', categoryarray=list(fy_order.keys()))
-                    st.plotly_chart(fig_mo_cpk, use_container_width=True)
+        # PIE (RESTORED)
+        if loc_col:
+            c1,c2 = st.columns(2)
 
-    # --- TRANSPORTATION ---
-    elif selected_source == "Transportation":
-        if month_col and qty_col:
-            st.subheader("📅 Monthly Performance (Financial Year)")
+            with c1:
+                fig_pie = px.pie(ana_df, values=cost_col, names=loc_col, hole=0.5)
+                st.plotly_chart(fig_pie, use_container_width=True)
 
-            fy_order = {'April': 1,'May': 2,'June': 3,'July': 4,'August': 5,'September': 6,
-                        'October': 7,'November': 8,'December': 9,'January': 10,'February': 11,'March': 12}
+            with c2:
+                loc_sum = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
+                loc_sum['Cost_per_kg'] = loc_sum[cost_col]/loc_sum[qty_col]
 
-            df_temp = filtered_df.copy()
-            df_temp[month_col] = df_temp[month_col].astype(str).str.strip().str.capitalize()
-            df_temp['Month_Sort'] = df_temp[month_col].map(fy_order)
-            df_temp = df_temp.dropna(subset=['Month_Sort'])
-
-            time_agg = df_temp.groupby([month_col, 'Month_Sort'])[qty_col].sum().reset_index().sort_values('Month_Sort')
-
-            fig_time = px.bar(time_agg, x=month_col, y=qty_col, text_auto=',.0f')
-            fig_time.update_xaxes(categoryorder='array', categoryarray=list(fy_order.keys()))
-            st.plotly_chart(fig_time, use_container_width=True)
+                fig_bar = px.bar(loc_sum, x=loc_col, y='Cost_per_kg',
+                                 color='Cost_per_kg', text_auto='.2f')
+                st.plotly_chart(fig_bar, use_container_width=True)
 
     # RAW DATA
-    with st.expander("🔍 View Filtered Raw Data"):
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+    with st.expander("🔍 View Data"):
+        st.dataframe(filtered_df)
 
 else:
-    st.error("No data available. Please check your Google Sheet IDs and permissions.")
+    st.error("No data")
