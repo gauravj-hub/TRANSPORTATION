@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 1. PAGE CONFIGURATION
+# -----------------------------
+# PAGE CONFIG
+# -----------------------------
 st.set_page_config(page_title="EEKI-Logistics Dashboard", page_icon="🚜", layout="wide")
 
-# 2. DATA SOURCES
+# -----------------------------
+# DATA SOURCES
+# -----------------------------
 SOURCES = {
     "Production": {"id": "1PQUiIP5yMQfmJwpwy9e4dv4-HgJNDMwCHfc78eaEu5Y", "gid": "0", "skip": []},
     "History of Transplantation": {"id": "1ww52WQi7nV3dD3tm8VaBsqU3BAStAjRFFp45wu7nC_0", "gid": "0", "skip": [0]},
@@ -16,7 +20,7 @@ SOURCES = {
 }
 
 # -----------------------------
-# DATA LOADING FUNCTION
+# LOAD DATA
 # -----------------------------
 @st.cache_data(ttl=300)
 def load_and_clean_data(source_name):
@@ -46,7 +50,7 @@ def load_and_clean_data(source_name):
             if any(x in col_lower for x in ['qty', 'weight', 'area', 'cost', 'amount', 'price']):
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
 
-        # FY COLUMN (April–March)
+        # FY (April–March)
         if date_col_detected:
             df['FY'] = df[date_col_detected].apply(
                 lambda x: x.year if pd.notnull(x) and x.month >= 4 else (x.year - 1 if pd.notnull(x) else None)
@@ -60,7 +64,7 @@ def load_and_clean_data(source_name):
 
 
 # -----------------------------
-# KPI ALERT FUNCTION
+# KPI ALERT FUNCTION (SAFE)
 # -----------------------------
 def detect_high_cost_months(df, month_col, value_col):
     if not month_col or not value_col:
@@ -77,6 +81,9 @@ def detect_high_cost_months(df, month_col, value_col):
     temp = temp.dropna(subset=['Month_Sort'])
 
     monthly = temp.groupby(month_col)[value_col].sum().reset_index()
+
+    if monthly.empty:
+        return monthly, None
 
     mean = monthly[value_col].mean()
     std = monthly[value_col].std()
@@ -119,9 +126,11 @@ if not df.empty:
     vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
     loc_col = next((c for c in df.columns if 'location' in c.lower()), None)
 
+    # -----------------------------
+    # TITLE + KPI
+    # -----------------------------
     st.title(f"📊 {selected_source} Dashboard")
 
-    # KPI
     c1,c2,c3 = st.columns(3)
     c1.metric("Records", len(filtered_df))
     if qty_col: c2.metric("Total Qty", f"{filtered_df[qty_col].sum():,.0f}")
@@ -129,12 +138,13 @@ if not df.empty:
 
     st.markdown("---")
 
-    # =========================
+    # =====================================================
     # 🚜 CROP & VENDOR ANALYSIS
-    # =========================
+    # =====================================================
     if selected_source == "Crop & Vendor Analysis" and cost_col and qty_col:
 
         f1,f2,f3 = st.columns(3)
+
         sel_crop = f1.selectbox("Crop", ["All"] + sorted(filtered_df[crop_col].dropna().unique())) if crop_col else "All"
         sel_vendor = f2.selectbox("Vendor", ["All"] + sorted(filtered_df[vendor_col].dropna().unique())) if vendor_col else "All"
         sel_loc = f3.selectbox("Location", ["All"] + sorted(filtered_df[loc_col].dropna().unique())) if loc_col else "All"
@@ -149,25 +159,17 @@ if not df.empty:
             ana_df = ana_df[ana_df[loc_col] == sel_loc]
 
         # =========================
-        # 🚨 KPI ALERT (NEW)
+        # 🚨 HIGH COST ALERT (SAFE)
         # =========================
         monthly, alerts = detect_high_cost_months(ana_df, month_col, cost_col)
 
         if alerts is not None and not alerts.empty:
             st.warning("⚠️ High Cost Alert: Unusual monthly expenditure detected")
 
-            st.dataframe(
-                alerts.style.background_gradient(cmap="Reds"),
-                use_container_width=True
-            )
-
-            st.info(
-                f"📊 Avg Monthly Cost: ₹ {monthly[cost_col].mean():,.0f} | "
-                f"Threshold: ₹ {monthly[cost_col].mean() + 1.5 * monthly[cost_col].std():,.0f}"
-            )
+            st.dataframe(alerts, use_container_width=True, hide_index=True)
 
         # =========================
-        # 📅 MONTH ON MONTH CHART
+        # 📅 MONTHLY TREND
         # =========================
         if month_col:
             st.subheader("📅 Month-on-Month Trend")
@@ -189,51 +191,65 @@ if not df.empty:
             c1,c2 = st.columns(2)
 
             with c1:
-                fig1 = px.bar(mo, x=month_col, y=qty_col, text_auto='.0f',
-                              title="Monthly Weight Trend")
-                st.plotly_chart(fig1, use_container_width=True)
+                st.plotly_chart(
+                    px.bar(mo, x=month_col, y=qty_col, text_auto='.0f', title="Monthly Weight Trend"),
+                    use_container_width=True
+                )
 
             with c2:
-                fig2 = px.line(mo, x=month_col, y='Cost_per_kg', markers=True,
-                               title="Cost per KG Trend")
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(
+                    px.line(mo, x=month_col, y='Cost_per_kg', markers=True, title="Cost per KG Trend"),
+                    use_container_width=True
+                )
 
         st.markdown("---")
 
-        # CATEGORY + SCATTER
+        # =========================
+        # SCATTER + BAR
+        # =========================
         summary = ana_df.groupby([crop_col, vendor_col]).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
         summary['Cost_per_kg'] = summary[cost_col] / summary[qty_col]
 
         c1,c2 = st.columns(2)
 
         with c1:
-            fig_bar = px.bar(summary, x=crop_col, y='Cost_per_kg', color=vendor_col)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(
+                px.bar(summary, x=crop_col, y='Cost_per_kg', color=vendor_col),
+                use_container_width=True
+            )
 
         with c2:
-            fig_scatter = px.scatter(summary, x=qty_col, y=cost_col,
-                                     size='Cost_per_kg', color=crop_col,
-                                     hover_name=vendor_col)
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            st.plotly_chart(
+                px.scatter(summary, x=qty_col, y=cost_col,
+                            size='Cost_per_kg', color=crop_col,
+                            hover_name=vendor_col),
+                use_container_width=True
+            )
 
+        # =========================
         # PIE + LOCATION
+        # =========================
         if loc_col:
             c1,c2 = st.columns(2)
 
             with c1:
-                fig_pie = px.pie(ana_df, names=loc_col, values=cost_col, hole=0.5)
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(
+                    px.pie(ana_df, names=loc_col, values=cost_col, hole=0.5),
+                    use_container_width=True
+                )
 
             with c2:
                 loc = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
                 loc['Cost_per_kg'] = loc[cost_col] / loc[qty_col]
 
-                fig_loc = px.bar(loc, x=loc_col, y='Cost_per_kg', color='Cost_per_kg')
-                st.plotly_chart(fig_loc, use_container_width=True)
+                st.plotly_chart(
+                    px.bar(loc, x=loc_col, y='Cost_per_kg', color='Cost_per_kg'),
+                    use_container_width=True
+                )
 
-    # =========================
+    # =====================================================
     # 🚚 TRANSPORTATION
-    # =========================
+    # =====================================================
     elif selected_source == "Transportation" and month_col and qty_col:
 
         st.subheader("📅 Monthly Weight Trend")
@@ -252,10 +268,11 @@ if not df.empty:
         agg = tmp.groupby([month_col,'Month_Sort'])[qty_col].sum().reset_index()
         agg = agg.sort_values('Month_Sort')
 
-        fig = px.bar(agg, x=month_col, y=qty_col, text_auto=',.0f',
-                     title="Transportation Monthly Weight")
-
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            px.bar(agg, x=month_col, y=qty_col, text_auto=',.0f',
+                   title="Transportation Monthly Weight"),
+            use_container_width=True
+        )
 
     # RAW DATA
     with st.expander("🔍 View Data"):
