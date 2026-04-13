@@ -89,7 +89,6 @@ def load_and_clean_data(source_name):
             if any(x in col_lower for x in ['qty', 'weight', 'area', 'cost', 'amount', 'price']):
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
 
-        # FY (April–March)
         if date_col_detected:
             df['FY'] = df[date_col_detected].apply(
                 lambda x: x.year if pd.notnull(x) and x.month >= 4 else (x.year - 1 if pd.notnull(x) else None)
@@ -164,9 +163,6 @@ if not df.empty:
     vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
     loc_col = next((c for c in df.columns if 'location' in c.lower()), None)
 
-    # -----------------------------
-    # TITLE + KPI
-    # -----------------------------
     st.title(f"📊 {selected_source} Dashboard")
 
     c1,c2,c3 = st.columns(3)
@@ -184,6 +180,8 @@ if not df.empty:
     # CROP & VENDOR ANALYSIS
     # -----------------------------
     if selected_source == "Crop & Vendor Analysis" and cost_col and qty_col:
+
+        filtered_df = filtered_df[filtered_df[qty_col] > 0]
 
         f1,f2,f3 = st.columns(3)
 
@@ -236,30 +234,31 @@ if not df.empty:
         st.markdown("---")
 
         summary = ana_df.groupby([crop_col, vendor_col]).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-
-        summary["Cost_Label"] = summary[cost_col].apply(format_indian_number)
+        summary["Cost_per_Kg"] = summary[cost_col] / summary[qty_col]
 
         c1,c2 = st.columns(2)
 
         with c1:
-            st.plotly_chart(px.bar(summary, x=crop_col, y=cost_col, color=vendor_col), use_container_width=True)
+            st.plotly_chart(px.bar(summary, x=crop_col, y="Cost_per_Kg", color=vendor_col), use_container_width=True)
 
         with c2:
-            st.plotly_chart(px.scatter(summary, x=qty_col, y=cost_col, color=crop_col), use_container_width=True)
+            st.plotly_chart(px.scatter(summary, x=qty_col, y="Cost_per_Kg", color=crop_col), use_container_width=True)
 
+        # Crop-wise Cost/Kg
+        crop_summary = ana_df.groupby(crop_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
+        crop_summary["Cost_per_Kg"] = crop_summary[cost_col] / crop_summary[qty_col]
+
+        st.subheader("🌾 Crop-wise Cost per Kg")
+        st.plotly_chart(px.bar(crop_summary, x=crop_col, y="Cost_per_Kg"), use_container_width=True)
+
+        # Location-wise Cost/Kg
         if loc_col:
-            c1,c2 = st.columns(2)
+            loc = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
+            loc["Cost_per_Kg"] = loc[cost_col] / loc[qty_col]
 
-            with c1:
-                st.plotly_chart(px.pie(ana_df, names=loc_col, values=cost_col, hole=0.5), use_container_width=True)
+            st.subheader("📍 Location-wise Cost per Kg")
+            st.plotly_chart(px.bar(loc, x=loc_col, y="Cost_per_Kg"), use_container_width=True)
 
-            with c2:
-                loc = ana_df.groupby(loc_col).agg({cost_col:'sum',qty_col:'sum'}).reset_index()
-                st.plotly_chart(px.bar(loc, x=loc_col, y=cost_col), use_container_width=True)
-
-    # -----------------------------
-    # TRANSPORTATION
-    # -----------------------------
     elif selected_source == "Transportation" and month_col and qty_col:
 
         st.subheader("📅 Monthly Weight Trend")
@@ -276,14 +275,10 @@ if not df.empty:
         tmp = tmp.dropna(subset=['Month_Sort'])
 
         agg = tmp.groupby([month_col,'Month_Sort'])[qty_col].sum().reset_index()
-
         agg["Qty_Label"] = agg[qty_col].apply(format_indian_number)
 
         st.plotly_chart(px.bar(agg, x=month_col, y=qty_col, text="Qty_Label"), use_container_width=True)
 
-    # -----------------------------
-    # RAW DATA (INDIAN FORMAT)
-    # -----------------------------
     with st.expander("🔍 View Data"):
         st.dataframe(format_df_indian(filtered_df), use_container_width=True, hide_index=True)
 
